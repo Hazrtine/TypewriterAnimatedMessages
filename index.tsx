@@ -25,9 +25,10 @@ import { ChannelStore, FluxDispatcher, SelectedChannelStore } from "@webpack/com
 
 import style from "./MissionofBurma.css?managed";
 
-const logger = new Logger("TerminalTypewriter");
 const animatedMessages = new Set<string>();
 const messageIntervals = new Map<string, NodeJS.Timeout>();
+const logger = new Logger("TypewriterAnimatedMessages");
+const TYPING_FLAG = 1 << 14; // 16384, right?
 
 const enum ChannelType {
     DM = 1,
@@ -37,7 +38,7 @@ const enum ChannelType {
 const settings = definePluginSettings({
     speed: {
         type: OptionType.NUMBER,
-        description: "The speed of the typewriter effect/ delay between each letter in milliseconds.",
+        description: "The speed of the typewriter effect/delay between each letter in milliseconds.",
         default: 35,
         placeholder: "35"
     },
@@ -61,11 +62,10 @@ const settings = definePluginSettings({
         type: OptionType.SELECT,
         description: "What type of channel to enable the animation (All, DMs, GroupDMs, etc.).",
         options: [
-            { label: "All Channels", value: "all_chan", default: true },
             { label: "Direct Messages Only", value: "user_dm" },
             { label: "Group DMs Only", value: "group_dm" },
             { label: "All DMs", value: "all_dm" },
-            { label: "Servers Only", value: "servers" }
+            { label: "All Channels", value: "all_chan", default: true },
         ]
     }
 });
@@ -88,13 +88,10 @@ function isChannelEnabled(channelId: string): boolean {
         return true;
     else if (isGroupDM && selection === "group_dm")
         return true;
-    else if (isDM || isGroupDM && selection === "all_dm")
-        return true;
-    else return selection === "servers";
-
+    else return isDM || isGroupDM && selection === "all_dm";
 }
 
-async function onMessage({ optimistic, type, message, channelId }) {
+function onMessage({ optimistic, type, message, channelId }) {
     if (optimistic || type !== "MESSAGE_CREATE") return;
     if (message.state === "SENDING") return;
     if (!message.content) return;
@@ -105,39 +102,65 @@ async function onMessage({ optimistic, type, message, channelId }) {
     let currentContent = "";
     const fullContent = message.content!;
     let currentIndex = 0;
-    if (messageIntervals.has(message.id)) {
+    if (messageIntervals.has(message.id))
         clearInterval(messageIntervals.get(message.id)!);
-    }
-    await sleep(settings.store.initialDelay);
+
     const interval = setInterval(() => {
         if (currentIndex >= fullContent.length) {
             clearInterval(interval);
             messageIntervals.delete(message.id);
             animatedMessages.delete(message.id);
+
             FluxDispatcher.dispatch({
                 type: "MESSAGE_UPDATE",
-                message: { ...message, content: fullContent },
-                terminalTyping: true
+                message: {
+                    ...message,
+                    content: fullContent,
+                    embeds: message.embeds,
+                    attachments: message.attachments,
+                    components: message.components,
+                    flags: message.flags & ~TYPING_FLAG
+                }
             });
             return;
         }
+
         currentContent += fullContent[currentIndex++];
+
         FluxDispatcher.dispatch({
             type: "MESSAGE_UPDATE",
             message: {
                 ...message,
                 content: currentContent + (settings.store.showCursor ? "▮" : ""),
-                terminalTyping: false
+                embeds: [], // if this isn't [] then prepare for your epilepsy testing
+                attachments: [],
+                components: [],
+                flags: message.flags | TYPING_FLAG
             }
         });
+
+
     }, settings.store.speed);
     messageIntervals.set(message.id, interval);
 }
+
 export default definePlugin({
     name: "TypewriterAnimatedMessages",
     description: "Types out messages character by character",
     authors: [Devs.haz],
     settings,
+    patches: [
+        {
+            find: "Message must not be a thread starter message", // thank you to all authors of messageLogger
+            replacement: [
+                {
+                    match: /\)\("li",\{(.+?),className:/,
+                    replace:
+                        ")(\"li\",{$1,className:((arguments[0].message.flags & " + TYPING_FLAG + ") ? \"typing-glow \" : \"\") +"
+                }
+            ]
+        }
+    ],
     start() {
         enableStyle(style);
         FluxDispatcher.subscribe("MESSAGE_CREATE", onMessage);
@@ -149,7 +172,33 @@ export default definePlugin({
         animatedMessages.clear();
     }
 });
-function sleep(ms: number) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
 
+
+/*
+
+    const { promise: imgLoaded, resolve } = Promise.withResolvers();
+
+    const img = new Image();
+    img.onload = resolve;
+    img.crossOrigin = "anonymous";
+    img.src = src;
+
+    await imgLoaded;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+
+    const ctx = canvas.getContext("2d");
+
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2, 0, 2 * Math.PI);
+    ctx.clip();
+
+    ctx.drawImage(img, 0, 0, size, size);
+
+    return canvas.toDataURL();
+
+    im so sorry i just stole this off of the guy who was talking about it in #plugin-development but i could make
+    it so that when there's media it could generate it top to bottom like old computers did,
+    or SUPER old ones where it was right to left pixel by pixel (that would be... an interesting addition i think)
+ */

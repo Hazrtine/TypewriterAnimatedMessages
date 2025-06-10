@@ -132,9 +132,9 @@ function onMessage({ optimistic, type, message, channelId }) {
             message: {
                 ...message,
                 content: currentContent + (settings.store.showCursor ? "▮" : ""),
-                embeds: [], // if this isn't [] then prepare for your epilepsy testing
-                attachments: [],
-                components: [],
+                embeds: null, // if this isn't null then prepare for your epilepsy testing
+                attachments: null,
+                components: null,
                 flags: message.flags | TYPING_FLAG
             }
         });
